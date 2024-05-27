@@ -3,7 +3,28 @@ import fs from 'fs';
 import readline from 'readline';
 import { Readable } from 'stream';
 
-const options = {};
+function processFile(filename) {
+    const image = sharp(`.cache/${filename}`, {});
+    image
+        .greyscale()
+        .sharpen({
+            sigma: 1,
+            flat: 1,
+            jagged: 2
+        })
+        .toFile(filename, (err, info) => {
+            if (err) {
+                console.error(err);
+            } else {
+                console.log('Done.');
+            }
+        });
+}
+
+if (process.argv.includes('--no-interaction')) {
+    processFile('charizard.png');
+    process.exit(0);
+}
 
 const rl = readline.createInterface({
     input: process.stdin,
@@ -11,25 +32,13 @@ const rl = readline.createInterface({
 });
 
 rl.question('Enter a filename: ', (filename) => {
-    function process(filename) {
-        const image = sharp(`.cache/${filename}`, options);
-        image
-            .greyscale()
-            .toFile(filename, (err, info) => {
-                if (err) {
-                    console.error(err);
-                } else {
-                    console.log('Done.');
-                }
-            });
-    }
     if (!filename) {
         filename = 'charizard.png';
         console.log(`No filename provided. Using ${filename}.`);
     }
     if (fs.existsSync(`images/${filename}`)) {
         rl.close();
-        process(filename);
+        processFile(filename);
         console.log(`File processed: images/${filename}`);
         return;
     }
@@ -55,7 +64,7 @@ rl.question('Enter a filename: ', (filename) => {
             const fileStream = fs.createWriteStream(`.cache/${filename}`);
             fileStream.on('finish', () => {
                 console.log('Downloaded.');
-                process(filename);
+                processFile(filename);
             });
             Readable.fromWeb(response.body).pipe(fileStream);
         });
