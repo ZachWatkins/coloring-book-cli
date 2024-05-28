@@ -1,29 +1,21 @@
-import sharp from 'sharp';
 import fs from 'fs';
 import readline from 'readline';
 import { Readable } from 'stream';
+import build from './src/app.js';
 
-function processFile(filename) {
-    const image = sharp(`.cache/${filename}`, {});
-    image
-        .greyscale()
-        .sharpen({
-            sigma: 1,
-            flat: 1,
-            jagged: 2
-        })
-        .toFile(filename, (err, info) => {
-            if (err) {
-                console.error(err);
-            } else {
-                console.log('Done.');
-            }
-        });
+async function processFile(filename) {
+    if (fs.existsSync(`images/${filename}`)) {
+        fs.unlinkSync(`images/${filename}`);
+    }
+    return build(`.cache/${filename}`, 'images').then(() => {
+        console.log('Done.');
+    });
 }
 
 if (process.argv.includes('--no-interaction')) {
-    processFile('charizard.png');
-    process.exit(0);
+    processFile('charizard.png').then(() => {
+        process.exit(0);
+    });
 }
 
 const rl = readline.createInterface({
@@ -38,9 +30,10 @@ rl.question('Enter a filename: ', (filename) => {
     }
     if (fs.existsSync(`images/${filename}`)) {
         rl.close();
-        processFile(filename);
-        console.log(`File processed: images/${filename}`);
-        return;
+        return processFile(filename).then(() => {
+            console.log(`File processed: images/${filename}`);
+            process.exit(0);
+        });
     }
     rl.question('Enter a URL: ', (url) => {
         rl.close();
