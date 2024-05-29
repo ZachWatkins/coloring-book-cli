@@ -1,46 +1,46 @@
 import sharp from 'sharp';
 import path from 'path';
+import fs from 'fs';
 const WHITE = 255;
 const BLACK = 0;
-
-build({
-    src: '.cache/charizard.png',
-    outdir: 'images',
-    textRegions: [],
-    imageRegions: [
-        { x: 75, y: 90, width: 70, height: 50 },
-        { x: 80, y: 120, width: 620, height: 432 },
-        { x: 615, y: 70, width: 50, height: 50 },
-        { x: 50, y: 720, width: 640, height: 5 },
-        { x: 50, y: 735, width: 90, height: 90 },
-        { x: 50, y: 832, width: 640, height: 5 },
-        { x: 105, y: 865, width: 30, height: 35 },
-        { x: 350, y: 865, width: 30, height: 35 },
-        { x: 550, y: 865, width: 105, height: 35 },
-        { x: 45, y: 964, width: 640, height: 45 },
-        { x: 45, y: 950, width: 50, height: 20 },
-    ],
-}).then(() => {
-    console.log('Done.');
-});
 
 /**
  * Build the image.
  * @param {Object} options The build options.
  * @param {string} options.src The path to the source image.
  * @param {string} options.outdir The path to save the output images.
- * @param {Array<{x: number, y: number, width: number, height: number}>} options.textRegions The regions to extract text from.
- * @param {Array<{x: number, y: number, width: number, height: number}>} options.imageRegions The regions to extract the background from.
+ * @param {Array<{x: number, y: number, width: number, height: number, filter?: string}>} options.regions The regions to extract from the image, and optionally manipulate given a filter.
  * @returns {Promise<void>}
  */
-export async function build({ src, outdir, textRegions, imageRegions }) {
+export async function build({ src, outdir, regions }) {
     let filename = src.split('/').pop();
     let basename = path.basename(filename, path.extname(filename));
-    Promise.allSettled([
-        extractText(src, `${outdir}/${basename}-text.png`, textRegions),
-        extractBackground(src, `${outdir}/${basename}-background.png`, imageRegions),
-    ]).then(() => {
-        combineImages(`${outdir}/${basename}-background.png`, `${outdir}/${basename}-text.png`, `${outdir}/${filename}`);
+    let jobs = [];
+    if (regions.some((region) => region.filter === undefined)) {
+        jobs.push(extract(src, `${outdir}/${basename}-base.png`, regions.filter((region) => region.filter === undefined)));
+    }
+    if (regions.some((region) => region.filter === 'dotted')) {
+        jobs.push(extractDotted(src, `${outdir}/${basename}-dotted.png`, regions.filter((region) => region.filter === 'dotted')));
+    }
+    if (regions.some((region) => region.filter === 'darkest')) {
+        jobs.push(extractDarkest(src, `${outdir}/${basename}-darkest.png`, regions.filter((region) => region.filter === 'darkest')));
+    }
+    return Promise.allSettled(jobs).then(async (files) => {
+        if (files.length === 1) {
+            if (files[0] !== `${outdir}/${filename}`) {
+                return fs.rename(files[0], `${outdir}/${filename}`, (err) => {
+                    if (err) {
+                        throw err;
+                    }
+                });
+            }
+            return;
+        }
+        console.log(files);
+        return sharp(files.shift().value)
+            .composite(files.map((file) => ({ input: file.value })))
+            .flatten({ background: { r: 255, g: 255, b: 255, alpha: 0 } })
+            .toFile(`${outdir}/${filename}`);
     });
 }
 
@@ -123,6 +123,24 @@ function applyFade(pixels, width) {
     }
 }
 
+async function extract(src, destination, regions) {
+    const { data, info } = await sharp(src)
+        .greyscale()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+    let outputData = copyRegionPixels(data, info.width, regions);
+    return await sharp(outputData, {
+        raw: {
+            width: info.width,
+            height: info.height,
+            channels: info.channels,
+        },
+    })
+        .unflatten()
+        .toFile(destination)
+        .then(() => destination);
+}
+
 /**
  * Extract text from the image.
  * @param {string} src The path to the source image.
@@ -131,7 +149,7 @@ function applyFade(pixels, width) {
  * @private
  * @returns {Promise<void>}
  */
-async function extractText(src, destination, regions) {
+async function extractDotted(src, destination, regions) {
     const { data, info } = await sharp(src)
         .greyscale()
         .raw()
@@ -149,7 +167,8 @@ async function extractText(src, destination, regions) {
         },
     })
         .unflatten()
-        .toFile(destination);
+        .toFile(destination)
+        .then(() => destination);
 }
 
 /**
@@ -160,7 +179,7 @@ async function extractText(src, destination, regions) {
  * @private
  * @returns {Promise<void>}
  */
-async function extractBackground(src, destination, regions) {
+async function extractDarkest(src, destination, regions) {
     const { data, info } = await sharp(src)
         .greyscale()
         .raw()
@@ -176,25 +195,9 @@ async function extractBackground(src, destination, regions) {
             channels: info.channels,
         },
     })
-        .toFile(destination);
-}
-
-/**
- * Combine the text and background images.
- * @param {string} backgroundPath The path to the background image.
- * @param {string} textPath The path to the text image.
- * @param {string} destination The path to save the combined image.
- * @private
- * @returns {Promise<void>}
- */
-async function combineImages(backgroundPath, textPath, destination) {
-    await sharp(backgroundPath)
-        .composite([{ input: textPath }])
-        .toBuffer()
-        .then((outputBuffer) => {
-            return sharp(outputBuffer)
-                .toFile(destination);
-        });
+        .unflatten()
+        .toFile(destination)
+        .then(() => destination);
 }
 
 export default build;
