@@ -8,40 +8,57 @@ const BLACK = 0;
  * Build the image.
  * @param {Object} options The build options.
  * @param {string} options.src The path to the source image.
- * @param {string} options.outdir The path to save the output images.
+ * @param {string} options.dest The path to the created image.
  * @param {Array<{x: number, y: number, width: number, height: number, filter?: string}>} options.regions The regions to extract from the image, and optionally manipulate given a filter.
- * @returns {Promise<void>}
+ * @returns {Promise<string>}
  */
-export async function build({ src, outdir, regions }) {
-    let filename = src.split('/').pop();
-    let basename = path.basename(filename, path.extname(filename));
-    let jobs = [];
-    if (regions.some((region) => region.filter === undefined)) {
-        jobs.push(extract(src, `${outdir}/${basename}-base.png`, regions.filter((region) => region.filter === undefined)));
-    }
-    if (regions.some((region) => region.filter === 'dotted')) {
-        jobs.push(extractDotted(src, `${outdir}/${basename}-dotted.png`, regions.filter((region) => region.filter === 'dotted')));
-    }
-    if (regions.some((region) => region.filter === 'darkest')) {
-        jobs.push(extractDarkest(src, `${outdir}/${basename}-darkest.png`, regions.filter((region) => region.filter === 'darkest')));
-    }
+export async function build({ src, dest, regions }) {
+    const srcBuffer = await sharp(src)
+        .greyscale()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+    let jobs = getJobs(regions, dest, srcBuffer);
     return Promise.allSettled(jobs).then(async (files) => {
         if (files.length === 1) {
-            if (files[0] !== `${outdir}/${filename}`) {
-                return fs.rename(files[0], `${outdir}/${filename}`, (err) => {
-                    if (err) {
-                        throw err;
-                    }
+            return files[0] === dest
+                ? dest
+                : fs.rename(files[0], dest, (err) => {
+                    if (err) throw err;
                 });
-            }
-            return;
         }
-        console.log(files);
         return sharp(files.shift().value)
             .composite(files.map((file) => ({ input: file.value })))
             .flatten({ background: { r: 255, g: 255, b: 255, alpha: 0 } })
-            .toFile(`${outdir}/${filename}`);
+            .toFile(dest);
     });
+}
+
+function getJobs(regions, dest, srcBuffer) {
+    let outdir = path.dirname(dest);
+    let basename = path.basename(dest, path.extname(dest));
+    let jobs = [
+        {
+            tag: 'base',
+            handle: extract,
+            regions: regions.filter((region) => region.filter === undefined),
+        },
+        {
+            tag: 'dotted',
+            handle: extractDotted,
+            regions: regions.filter((region) => region.filter === 'dotted'),
+        },
+        {
+            tag: 'darkest',
+            handle: extractDarkest,
+            regions: regions.filter((region) => region.filter === 'darkest'),
+        },
+    ];
+    return jobs.reduce((acc, job) => {
+        if (job.regions.length) {
+            acc.push(job.handle(srcBuffer, `${outdir}/${basename}.${job.tag}.png`, job.regions));
+        }
+        return acc;
+    }, []);
 }
 
 /**
@@ -123,11 +140,16 @@ function applyFade(pixels, width) {
     }
 }
 
-async function extract(src, destination, regions) {
-    const { data, info } = await sharp(src)
-        .greyscale()
-        .raw()
-        .toBuffer({ resolveWithObject: true });
+/**
+ * Extract the image.
+ * @param {Buffer} srcBuffer The source image buffer.
+ * @param {string} destination The path to save the extracted image.
+ * @param {Array<{x: number, y: number, width: number, height: number}>} regions The regions to extract from the image.
+ * @private
+ * @returns {Promise<string>}
+ */
+async function extract(srcBuffer, destination, regions) {
+    const { data, info } = srcBuffer;
     let outputData = copyRegionPixels(data, info.width, regions);
     return await sharp(outputData, {
         raw: {
@@ -143,17 +165,14 @@ async function extract(src, destination, regions) {
 
 /**
  * Extract text from the image.
- * @param {string} src The path to the source image.
+ * @param {Buffer} srcBuffer The source image buffer.
  * @param {string} destination The path to save the extracted text image.
  * @param {Array<{x: number, y: number, width: number, height: number}>} regions The regions to extract text from.
  * @private
  * @returns {Promise<void>}
  */
-async function extractDotted(src, destination, regions) {
-    const { data, info } = await sharp(src)
-        .greyscale()
-        .raw()
-        .toBuffer({ resolveWithObject: true });
+async function extractDotted(srcBuffer, destination, regions) {
+    const { data, info } = srcBuffer;
     let outputData = copyRegionPixels(data, info.width, regions);
     let minPixelValue = getDarkestPixel(outputData);
     let maxPixelValue = minPixelValue + 120;
@@ -173,17 +192,14 @@ async function extractDotted(src, destination, regions) {
 
 /**
  * Extract the background from the image.
- * @param {string} src The path to the source image.
+ * @param {Buffer} srcBuffer The source image buffer.
  * @param {string} destination The path to save the extracted background image.
  * @param {Array<{x: number, y: number, width: number, height: number}>} regions The regions to extract the background from.
  * @private
  * @returns {Promise<void>}
  */
-async function extractDarkest(src, destination, regions) {
-    const { data, info } = await sharp(src)
-        .greyscale()
-        .raw()
-        .toBuffer({ resolveWithObject: true });
+async function extractDarkest(srcBuffer, destination, regions) {
+    const { data, info } = srcBuffer;
     let outputData = copyRegionPixels(data, info.width, regions);
     let minPixelValue = getDarkestPixel(outputData);
     let maxPixelValue = minPixelValue + 120;
