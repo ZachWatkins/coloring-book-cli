@@ -13,24 +13,51 @@ const BLACK = 0;
  * @returns {Promise<string>}
  */
 export async function build({ src, dest, regions }) {
-    const srcBuffer = await sharp(src)
+    let filedest = dest;
+    if (fs.lstatSync(dest).isDirectory()) {
+        filedest = path.join(dest, path.basename(src));
+    }
+    if (!fs.existsSync(path.dirname(filedest))) {
+        fs.mkdirSync(path.dirname(filedest), { recursive: true });
+    }
+    return await sharp(src)
         .greyscale()
         .raw()
-        .toBuffer({ resolveWithObject: true });
-    let jobs = getJobs(regions, dest, srcBuffer);
-    return Promise.allSettled(jobs).then(async (files) => {
-        if (files.length === 1) {
-            return files[0] === dest
-                ? dest
-                : fs.rename(files[0], dest, (err) => {
-                    if (err) throw err;
+        .toBuffer({ resolveWithObject: true })
+        .then((srcBuffer) => Promise.allSettled(getJobs(regions, filedest, srcBuffer)))
+        .then((files) => {
+            if (files.length === 0) {
+                return new Promise((resolve, reject) => {
+                    fs.copyFile(src, filedest, (err) => {
+                        if (err) {
+                            reject(err);
+                        } else {
+                            resolve(filedest);
+                        }
+                    });
                 });
-        }
-        return sharp(files.shift().value)
-            .composite(files.map((file) => ({ input: file.value })))
-            .flatten({ background: { r: 255, g: 255, b: 255, alpha: 0 } })
-            .toFile(dest);
-    });
+            }
+            if (files.length === 1) {
+                if (files[0].value === filedest) {
+                    return new Promise((resolve) => resolve(filedest));
+                }
+                return new Promise((resolve, reject) => {
+                    fs.rename(files[0].value, filedest, (err) => {
+                        if (err) {
+                            reject(err);
+                        } else {
+                            resolve(filedest);
+                        }
+                    });
+                });
+            }
+            return sharp(files[0].value)
+                .composite(files.filter((file, index) => index > 0).map((file) => ({ input: file.value })))
+                .flatten({ background: { r: 255, g: 255, b: 255, alpha: 0 } })
+                .toFile(filedest)
+                .then(() => Promise.all(files.map((file) => fs.promises.unlink(file.value))))
+                .then(() => filedest);
+        });
 }
 
 function getJobs(regions, dest, srcBuffer) {
